@@ -1,0 +1,25 @@
+body {
+  margin: 0;
+}
+
+main {
+  font-family: sans-serif;
+  color: #143d60;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  text-align: center;
+  max-width: 500px;
+  place-self: center;
+  line-height: 3;
+  font-size: x-large;
+}
+
+section {
+  padding: 10px 30px;
+}
+
+.welcome {
+  color: #27667b;
+}

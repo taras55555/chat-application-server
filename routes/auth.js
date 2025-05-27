@@ -6,6 +6,15 @@ const { MongoClient, ObjectId } = require("mongodb");
 const mongoClient = new MongoClient(process.env.MONGODB_URI);
 const db = mongoClient.db('reenbit-test-project');
 
+
+async function fetchUserById(userId) {
+
+    const query = { _id: new ObjectId(userId) }
+    const user = await db.collection('users').findOne(query);
+
+    return user
+}
+
 passport.use(new GoogleStrategy({
     clientID: process.env['GOOGLE_CLIENT_ID'],
     clientSecret: process.env['GOOGLE_CLIENT_SECRET'],
@@ -121,8 +130,8 @@ router.get('/users/:search', async (req, res) => {
 })
 
 router.get('/messages', async (req, res) => {
-    // const currentUserId = req.user.id.toString()
-    const currentUserId = '6830826510b154fb1260deed'
+    const currentUserId = req.user.id.toString()
+    // const currentUserId = '6830826510b154fb1260deed'
     const query = { members: currentUserId }
     const messages = await db.collection('conversations')
         .find(query)
@@ -131,7 +140,10 @@ router.get('/messages', async (req, res) => {
     const contactsList = messages.map((contact) => {
         const lastMessage = contact.chatHistory.slice(-1)
         contact.chatHistory.length = 0
-        contact.chatHistory = [lastMessage]
+        contact.chatHistory = lastMessage
+        contact.members = contact.members.filter(member => member !== currentUserId)
+        delete contact.memberNames[currentUserId]
+
         return contact
     })
     res.json(contactsList)
@@ -139,25 +151,30 @@ router.get('/messages', async (req, res) => {
 
 router.get('/messages/:search', async (req, res) => {
     const currentUserId = req.user.id.toString()
+    // const currentUserId = '6830826510b154fb1260deed'
     const { search: participantId } = req.params
 
     const query = { $and: [{ members: currentUserId }, { members: participantId }] }
-    const { chatHistory = [] } = await db.collection('conversations').findOne(query) || []
+    const { chatHistory = [], memberNames = {} } = await db.collection('conversations').findOne(query) || []
 
-    res.json(chatHistory)
+    res.json({ chatHistory, memberNames })
 })
 
 router.post('/messages', async (req, res) => {
     const currentUserId = req.user.id.toString()
-    const { participantId, message } = req.body
+    const currentUserName = req.user.name
+    const { participantsWithoutMe, message } = req.body
+    console.log('participantId-', participantsWithoutMe)
+    const { name: participantName } = await fetchUserById(participantsWithoutMe)
 
     const newMessage = {
         sender: currentUserId,
+        currentUserName,
         message,
         timeSent: new Date(),
     }
 
-    const query = { $and: [{ members: currentUserId }, { members: participantId }] }
+    const query = { $and: [{ members: currentUserId }, { members: participantsWithoutMe }] }
     const foundConversation = await db.collection('conversations').findOne(query)
 
     if (foundConversation) {
@@ -166,15 +183,20 @@ router.post('/messages', async (req, res) => {
             { _id: foundConversation._id },
             {
                 $push: { chatHistory: newMessage },
-                $set: { lastActivity: new Date() }
+                $set: {
+                    lastActivity: new Date(),
+                    [`memberNames.${currentUserId}`]: currentUserName
+                },
             }
         )
 
     } else {
         const conversationInsertResult = await db.collection('conversations').insertOne({
-            members: [currentUserId, participantId],
+            members: [currentUserId, participantsWithoutMe],
+            memberNames: { [currentUserId]: currentUserName, [participantsWithoutMe]: participantName },
             chatHistory: [newMessage],
             lastActivity: new Date()
+
         });
     }
 

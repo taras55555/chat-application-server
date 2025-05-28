@@ -164,7 +164,6 @@ router.post('/messages', async (req, res) => {
     const currentUserId = req.user.id.toString()
     const currentUserName = req.user.name
     const { participantsWithoutMe, message } = req.body
-    console.log('participantId-', participantsWithoutMe)
     const { name: participantName } = await fetchUserById(participantsWithoutMe)
 
     const newMessage = {

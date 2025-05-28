@@ -44,18 +44,6 @@ app.use(passport.session());
 app.use(express.static('public'));
 app.use('/', authRouter)
 
-// passport.serializeUser(function (user, cb) {
-//     process.nextTick(function () {
-//         cb(null, { id: user.id, username: user.username, name: user.name });
-//     });
-// });
-
-// passport.deserializeUser(function (user, cb) {
-//     process.nextTick(function () {
-//         return cb(null, user);
-//     });
-// });
-
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ noServer: true });
 
@@ -69,7 +57,6 @@ server.on('upgrade', (req, socket, head) => {
         }
 
         wss.handleUpgrade(req, socket, head, (ws) => {
-            console.log(req.session.passport.user.id.toString())
             ws.userId = req.session.passport.user.id.toString();
             wss.emit('connection', ws, req);
         });
@@ -77,7 +64,6 @@ server.on('upgrade', (req, socket, head) => {
 });
 
 wss.on('connection', (ws, req) => {
-    console.log('71 -', req.session.passport.user.id.toString())
     const userId = req.session.passport.user.id.toString();
     console.log(`✅ WebSocket connected for user ${userId}`);
 
@@ -86,12 +72,12 @@ wss.on('connection', (ws, req) => {
     }
     userSockets.get(userId).add(ws);
 
-    ws.on('message', (target) => {
-        console.log(`📩 Message from ${userId}: ${target}`);
+    ws.on('message', (targets) => {
+        const {participantsWithoutMe, me} = JSON.parse(targets)
+        console.log(`📩 Message from ${userId}: ${participantsWithoutMe} ${me}`);
 
-        // Відправити повідомлення всім клієнтам
         wss.clients.forEach((client) => {
-            if (client.readyState === WebSocket.OPEN && client.userId === target.toString()) {
+            if (client.readyState === WebSocket.OPEN && client.userId === participantsWithoutMe || client.userId === me) {
                 client.send(`${Date.now()}`);
             }
         });

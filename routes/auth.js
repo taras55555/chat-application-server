@@ -35,6 +35,19 @@ passport.use(new GoogleStrategy({
 
             const userId = userInsertResult.insertedId;
 
+            const predefinedUsers = await db.collection('users').find({ isPredefined: true }).toArray();
+            const predefinedConversations = predefinedUsers.map((user) => {
+                const conversation = {}
+                conversation.members = [userId.toString(), user._id.toString()]
+                conversation.memberNames = { [userId]: profile.displayName, [user._id]: user.name }
+                conversation.chatHistory = []
+                conversation.isPredefined = true
+
+                return conversation
+            })
+
+            await db.collection('conversations').insertMany(predefinedConversations);
+
             await db.collection('federated_credentials').insertOne({
                 user_id: userId,
                 provider: issuer,
@@ -79,20 +92,26 @@ passport.deserializeUser(function (user, cb) {
 router.get('/login/federated/google', passport.authenticate('google'));
 
 router.get('/oauth2/redirect/google', passport.authenticate('google', {
-    successRedirect: '/',
+    successRedirect: process.env.ORIGIN,
     failureRedirect: '/login'
 }));
 
 router.get('/login', function (req, res, next) {
-    res.render('login');
+    res.send('error');
 });
 
 router.get('/user', (req, res) => {
-    if (req.isAuthenticated()) {
-        return res.json(req.user)
+    try {
+        if (req.isAuthenticated()) {
+            res.status(200).json(req.user)
+        } else {
+            res.status(200).json({ "isAuthenticated": req.isAuthenticated() })
+        }
+
+    } catch (err) {
+        res.status(500).json({ error: 'Error fetching user' });
     }
 
-    res.json({ "isAuthenticated": req.isAuthenticated() })
 })
 
 router.get('/user/:id', async (req, res) => {
@@ -108,8 +127,6 @@ router.get('/user/:id', async (req, res) => {
 router.get('/users', async (req, res) => {
     const user = await db.collection('users').find().toArray();
 
-    console.log(user)
-
     res.json(user)
 })
 
@@ -123,7 +140,9 @@ router.get('/users/:search', async (req, res) => {
             { email: { $regex: search, $options: 'i' } }
         ]
     }
-    const user = (await db.collection('users').find(query).toArray())
+    const user = (await db.collection('users')
+        .find(query)
+        .toArray())
         .filter(user => !user._id.equals(currentUserIdObject))
 
     res.json(user)
@@ -131,39 +150,42 @@ router.get('/users/:search', async (req, res) => {
 
 router.get('/messages', async (req, res) => {
     const currentUserId = req.user.id.toString()
-    // const currentUserId = '6830826510b154fb1260deed'
     const query = { members: currentUserId }
     const messages = await db.collection('conversations')
         .find(query)
         .sort({ lastActivity: -1 })
         .toArray()
     const contactsList = messages.map((contact) => {
-        const lastMessage = contact.chatHistory.slice(-1)
-        contact.chatHistory.length = 0
-        contact.chatHistory = lastMessage
-        contact.members = contact.members.filter(member => member !== currentUserId)
-        delete contact.memberNames[currentUserId]
-
+        const lastMessage = contact.chatHistory?.slice(-1)
+        if (lastMessage.length) {
+            contact.chatHistory.length = 0
+            contact.chatHistory = lastMessage
+            const truncatedMessage = (maxLength) => lastMessage[0].message.length > maxLength
+                ? `${lastMessage[0].message.slice(0, maxLength)}...`
+                : lastMessage[0].message
+            lastMessage[0].message = truncatedMessage(15)
+            contact.members = contact.members.filter(member => member !== currentUserId)
+        }
         return contact
     })
     res.json(contactsList)
 })
 
-router.get('/messages/:search', async (req, res) => {
+router.get('/message/:search', async (req, res) => {
     const currentUserId = req.user.id.toString()
-    // const currentUserId = '6830826510b154fb1260deed'
     const { search: participantId } = req.params
 
     const query = { $and: [{ members: currentUserId }, { members: participantId }] }
-    const { chatHistory = [], memberNames = {} } = await db.collection('conversations').findOne(query) || []
+    const { chatHistory = [], memberNames = {}, isPredefined } = await db.collection('conversations').findOne(query) || []
 
-    res.json({ chatHistory, memberNames })
+    res.json({ chatHistory, memberNames, isPredefined })
 })
 
 router.post('/messages', async (req, res) => {
+    const { participantsWithoutMe, message } = req.body
     const currentUserId = req.user.id.toString()
     const currentUserName = req.user.name
-    const { participantsWithoutMe, message } = req.body
+
     const { name: participantName } = await fetchUserById(participantsWithoutMe)
 
     const newMessage = {
@@ -202,7 +224,35 @@ router.post('/messages', async (req, res) => {
     res.json({ foundConversation })
 })
 
-router.get('/logout', function (req, res, next) {
+router.post('/messages/bot', async (req, res) => {
+    const { sender, recipient, message } = req.body
+    const newMessage = {
+        sender: sender,
+        message,
+        timeSent: new Date(),
+    }
+
+    const query = { $and: [{ members: sender }, { members: recipient }] }
+    const foundConversation = await db.collection('conversations').findOne(query)
+
+    if (foundConversation) {
+
+        const updateConversationResult = await db.collection('conversations').updateOne(
+            { _id: foundConversation._id },
+            {
+                $push: { chatHistory: newMessage },
+                $set: { lastActivity: new Date() },
+            }
+        )
+
+        return res.json({ updateConversationResult })
+    }
+
+    res.json({ 'message': 'No conversation found for the given criteria.' })
+
+})
+
+router.post('/logout', function (req, res, next) {
     req.logout(function (err) {
         if (err) { return next(err); }
         res.redirect('/');

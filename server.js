@@ -9,7 +9,7 @@ const passport = require('passport');
 const session = require('express-session')
 const authRouter = require('./routes/auth')
 const MongoDBStore = require('connect-mongodb-session')(session)
-
+const initUsers = require('./utils/initializeChats')
 const app = express()
 const port = process.env.PORT
 
@@ -47,7 +47,7 @@ app.use('/', authRouter)
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ noServer: true });
 
-const userSockets = new Map();
+
 server.on('upgrade', (req, socket, head) => {
     sessionMiddleware(req, {}, () => {
         if (!req.session.passport || !req.session.passport.user) {
@@ -63,8 +63,16 @@ server.on('upgrade', (req, socket, head) => {
     });
 });
 
+async function initMongodb() {
+    await initUsers();
+}
+
+initMongodb()
+
+const userSockets = new Map();
 wss.on('connection', (ws, req) => {
     const userId = req.session.passport.user.id.toString();
+
     console.log(`✅ WebSocket connected for user ${userId}`);
 
     if (!userSockets.has(userId)) {
@@ -72,15 +80,39 @@ wss.on('connection', (ws, req) => {
     }
     userSockets.get(userId).add(ws);
 
-    ws.on('message', (targets) => {
-        const {participantsWithoutMe, me} = JSON.parse(targets)
+    ws.on('message', async (targets) => {
+        const { participantsWithoutMe, me = null, isPredefined = null, participantName = null, message = null } = JSON.parse(targets)
+
         console.log(`📩 Message from ${userId}: ${participantsWithoutMe} ${me}`);
 
         wss.clients.forEach((client) => {
             if (client.readyState === WebSocket.OPEN && client.userId === participantsWithoutMe || client.userId === me) {
-                client.send(`${Date.now()}`);
+                const type = client.userId === me ? 'update' : 'notification'
+                client.send(JSON.stringify({ type, participantName, message }));
             }
         });
+
+        if (isPredefined) {
+            const response = await fetch('http://api.quotable.io/quotes/random');
+            const [{ content: message }] = await response.json();
+
+            const responsePost = await fetch('http://localhost:3000/messages/bot', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ 'sender': participantsWithoutMe, 'recipient': me, message })
+            });
+            wss.clients.forEach((client) => {
+                if (client.readyState === WebSocket.OPEN && client.userId === me) {
+
+                    const type = 'notification'
+                    console.log('prdefined user:', { type, participantName, message })
+                    client.send(JSON.stringify({ type, participantName, message }));
+                }
+            });
+
+        }
 
     });
 

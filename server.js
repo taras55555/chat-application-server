@@ -96,7 +96,7 @@ wss.on('connection', (ws, req) => {
             const response = await fetch('http://api.quotable.io/quotes/random');
             const [{ content: message }] = await response.json();
 
-            const responsePost = await fetch('http://localhost:3000/messages/bot', {
+            const responsePost = await fetch(`${process.env.SERVER_URL}/messages/bot`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -107,7 +107,6 @@ wss.on('connection', (ws, req) => {
                 if (client.readyState === WebSocket.OPEN && client.userId === me) {
 
                     const type = 'notification'
-                    console.log('prdefined user:', { type, participantName, message })
                     client.send(JSON.stringify({ type, participantName, message }));
                 }
             });
